@@ -381,6 +381,55 @@ class InputFeedRNNDecoder(RNNDecoderBase):
         return self.embeddings.embedding_size + self.hidden_size
 
 
+class TwinNTMModel(nn.Module):
+    def __init__(self, encoder, decoders, multigpu=False):
+        super(TwinNTMModel, self).__init__()
+        self.multigpu = multigpu
+        self.encoder = encoder
+        self.forward_decoder, self.backward_decoder = decoders
+
+    def forward(self, src, tgt, lengths, dec_state=None):
+        """
+        Args:
+            src(FloatTensor): a sequence of source tensors with
+                    optional feature tensors of size (len x batch).
+            tgt(FloatTensor): a sequence of target tensors with
+                    optional feature tensors of size (len x batch).
+            lengths([int]): an array of the src length.
+            dec_state: A decoder state object
+        Returns:
+            outputs (FloatTensor): (len x batch x hidden_size): decoder outputs
+            attns (FloatTensor): Dictionary of (src_len x batch)
+            dec_hidden (FloatTensor): tuple (1 x batch x hidden_size)
+                                      Init hidden state
+        """
+        src = src
+        tgt = tgt[:-1]  # exclude last target from inputs
+        enc_hidden, context = self.encoder(src, lengths)
+        enc_state = self.decoder.init_decoder_state(src, context, enc_hidden)
+
+        out, dec_state, attns = self.forward_decoder(
+            tgt, context,
+            enc_state if dec_state is None
+            else dec_state)
+
+        # TODO: revert tgt here
+        tgt_reverted = tgt
+        back_out_reverted, back_dec_state_reverted, back_attns = self.backward_decoder(
+            tgt_reverted, context,
+            enc_state if dec_state is None
+            else dec_state)
+        # TODO: revert output and states here
+        back_out = back_out_reverted
+        back_dec_state = back_dec_state_reverted
+
+        if self.multigpu:
+            # Not yet supported on multi-gpu
+            dec_state = None
+            attns = None
+        return (out, back_out), (attns, back_attns), (dec_state, back_dec_state)
+
+
 class NMTModel(nn.Module):
     """
     The encoder + decoder Neural Machine Translation Model.
